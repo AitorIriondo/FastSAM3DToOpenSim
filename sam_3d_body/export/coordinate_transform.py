@@ -84,6 +84,7 @@ class CoordinateTransformer:
 
         # 2. Uniform height scale using ground-truth subject_height
         scale = self._compute_height_scale(kpts, jc)
+        self._last_scale = scale
         kpts = kpts * scale
         if jc is not None:
             jc = jc * scale
@@ -159,6 +160,98 @@ class CoordinateTransformer:
             result_j = corrected_j[0] if single_frame else corrected_j
             return result_k, result_j
         return result_k
+
+    def correct_lean_cam_pitch(
+        self,
+        keypoints: np.ndarray,
+        jcoords: Optional[np.ndarray] = None,
+        cam_t: Optional[np.ndarray] = None,
+    ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+        """
+        Correct forward lean by estimating camera pitch from the cam_t trajectory.
+
+        The body root walks through camera space; any systematic drift of
+        cam_t_opensim.Y with cam_t_opensim.X reveals the camera tilt angle θ:
+            d(Y_opensim)/d(X_opensim) = -tan(θ)  →  θ = -arctan(slope)
+
+        A Rz(θ) rotation (around OpenSim Z = lateral axis) is applied to every
+        frame, pivoting around the pelvis, followed by ground re-alignment.
+
+        keypoints/jcoords must already be in OpenSim space (metres or mm).
+        cam_t must be in camera space (raw, before rotation/scaling).
+        """
+        if cam_t is None or len(cam_t) < 4:
+            result_k = keypoints
+            if jcoords is not None:
+                return result_k, jcoords
+            return result_k
+
+        angle = self._estimate_pitch_angle(cam_t)
+        if abs(angle) < 0.5:
+            if jcoords is not None:
+                return keypoints, jcoords
+            return keypoints
+
+        single_frame = keypoints.ndim == 2
+        if single_frame:
+            keypoints = keypoints[np.newaxis]
+            if jcoords is not None:
+                jcoords = jcoords[np.newaxis]
+
+        rad = np.radians(angle)
+        cos_a, sin_a = np.cos(rad), np.sin(rad)
+        # Rotation around OpenSim Z (lateral): tilts X↔Y
+        Rz = np.array([
+            [ cos_a, sin_a, 0],
+            [-sin_a, cos_a, 0],
+            [     0,     0, 1],
+        ], dtype=np.float64)
+
+        corrected_k = keypoints.copy()
+        corrected_j = jcoords.copy() if jcoords is not None else None
+        for i in range(corrected_k.shape[0]):
+            pelvis = (corrected_k[i, 9] + corrected_k[i, 10]) / 2
+            corrected_k[i] = (corrected_k[i] - pelvis) @ Rz.T + pelvis
+            if corrected_j is not None:
+                corrected_j[i] = (corrected_j[i] - pelvis) @ Rz.T + pelvis
+
+        # Re-align feet to ground after rotation
+        corrected_k, ground_offsets = self._align_to_ground(corrected_k, return_offsets=True)
+        if corrected_j is not None:
+            corrected_j[:, :, 1] -= ground_offsets[:, None]
+
+        if single_frame:
+            corrected_k = corrected_k[0]
+            if corrected_j is not None:
+                corrected_j = corrected_j[0]
+
+        if corrected_j is not None:
+            return corrected_k, corrected_j
+        return corrected_k
+
+    def _estimate_pitch_angle(self, cam_t: np.ndarray) -> float:
+        """
+        Estimate camera pitch angle (degrees) from the cam_t trajectory.
+
+        cam_t is in camera space (raw, shape (N,3)). We convert to OpenSim
+        axes and fit a line to Y_opensim vs X_opensim.  The slope equals
+        -tan(θ), so θ = -arctan(slope).  A positive θ means the camera
+        points downward, which makes the body appear to lean forward.
+        """
+        scale = getattr(self, "_last_scale", 1.0)
+        ct_opensim = cam_t @ self.CAMERA_TO_OPENSIM.T * scale
+
+        x = ct_opensim[:, 0]  # forward/depth in OpenSim
+        y = ct_opensim[:, 1]  # up
+
+        # Need enough horizontal travel to get a meaningful slope
+        x_range = np.ptp(x)
+        if x_range < 0.05:
+            return 0.0
+
+        slope, _ = np.polyfit(x, y, 1)
+        angle = -np.degrees(np.arctan(slope))
+        return float(angle)
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -438,6 +438,14 @@ def main(args):
             kpts_opensim, jcoords=jcoords_opensim
         )
 
+    # 2c. Camera-pitch-based lean correction (experimental, opt-in)
+    if args.lean_cam_pitch_fix:
+        pitch_angle = transformer._estimate_pitch_angle(cam_t_processed)
+        print(f"  Camera pitch correction: {pitch_angle:.2f}°")
+        kpts_opensim, jcoords_opensim = transformer.correct_lean_cam_pitch(
+            kpts_opensim, jcoords=jcoords_opensim, cam_t=cam_t_processed
+        )
+
     # 3. Map MHR70 → OpenSim marker names; append real spine/neck/head joints
     body_only = (args.inference_type == "body")
     converter = KeypointConverter()
@@ -589,6 +597,10 @@ if __name__ == "__main__":
                         help="Skip full body mesh GLB export (saves ~185 MB for long videos)")
     parser.add_argument("--no_lean_fix", action="store_true",
                         help="Skip automatic forward-lean correction")
+    parser.add_argument("--lean_cam_pitch_fix", action="store_true",
+                        help="Experimental: correct residual forward lean by estimating "
+                             "camera pitch from the cam_t trajectory (linear regression). "
+                             "Applied after --no_lean_fix check.")
     parser.add_argument("--person_height", type=float, default=None,
                         help="Known person height in metres (e.g. 1.69). Scales all 3D output "
                              "so the skeleton height matches this value.")
