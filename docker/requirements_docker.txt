@@ -18,7 +18,7 @@ braceexpand==0.1.7
 brotli==1.2.0
 certifi==2026.2.25
 charset-normalizer==3.4.6
-chumpy==0.70
+# chumpy installed separately with --no-build-isolation (broken setup.py)
 click==8.3.1
 cloudpickle==3.1.2
 colorama==0.4.6

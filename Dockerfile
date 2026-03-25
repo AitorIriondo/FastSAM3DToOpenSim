@@ -58,11 +58,15 @@ RUN conda create -y -n fast_sam_3d_body python=3.11 && \
         --index-url https://download.pytorch.org/whl/cu128 && \
     # TensorRT
     pip install --no-cache-dir tensorrt==10.16.0.72 && \
+    # chumpy has a broken setup.py that requires pip in isolated build env
+    pip install --no-cache-dir --no-build-isolation chumpy==0.70 && \
     # Main requirements (torch/trt/git+ entries stripped)
     pip install --no-cache-dir -r /tmp/requirements_docker.txt && \
-    # Git-hosted packages (pinned commits)
+    # detectron2 imports torch in setup.py — needs no-build-isolation
+    pip install --no-cache-dir --no-build-isolation \
+        "git+https://github.com/facebookresearch/detectron2.git@a1ce2f956a1d2212ad672e3c47d53405c2fe4312" && \
+    # Remaining git-hosted packages
     pip install --no-cache-dir \
-        "git+https://github.com/facebookresearch/detectron2.git@a1ce2f956a1d2212ad672e3c47d53405c2fe4312" \
         "git+https://github.com/microsoft/MoGe.git@07444410f1e33f402353b99d6ccd26bd31e469e8" \
         "git+https://github.com/EasternJournalist/pipeline.git@866f059d2a05cde05e4a52211ec5051fd5f276d6" \
         "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183" && \
@@ -72,9 +76,8 @@ RUN conda create -y -n fast_sam_3d_body python=3.11 && \
 # Env 2: opensim (Python 3.10, opensim-org channel)                            #
 # opensim_ik_runner.py calls /opt/conda/envs/opensim/bin/python directly.     #
 # --------------------------------------------------------------------------- #
-RUN conda create -y -n opensim python=3.10 \
-        -c opensim-org -c conda-forge \
-        opensim && \
+RUN conda create -y -n opensim python=3.10 && \
+    conda install -y -n opensim -c opensim-org -c conda-forge opensim && \
     conda clean -afy
 
 # --------------------------------------------------------------------------- #
