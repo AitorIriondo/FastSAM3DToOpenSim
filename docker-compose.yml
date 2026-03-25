@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  fastsam3d:
+    build: .
+    image: fastsam3d:latest
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      # ── PyTorch-only defaults (no TRT) ──────────────────────────────────────
+      # After building .engine files, override via: --env-file docker/trt.env
+      - FOV_TRT=0
+      - FOV_FAST=1
+      - FOV_MODEL=s
+      - FOV_LEVEL=0
+      - USE_TRT_BACKBONE=0
+      - USE_COMPILE=0
+      - DECODER_COMPILE=0
+      - MHR_NO_CORRECTIVES=1
+      - GPU_HAND_PREP=1
+      - BODY_INTERM_PRED_LAYERS=0,2
+      - DEBUG_NAN=0
+      - PARALLEL_DECODERS=0
+      - COMPILE_WARMUP_BATCH_SIZES=1
+      - SKIP_KEYPOINT_PROMPT=1
+    volumes:
+      - ./checkpoints:/app/checkpoints        # 7.6 GB — never baked into image
+      - ./videos:/app/videos:ro
+      - ./outputs:/outputs
+    stdin_open: true
+    tty: true
+    command: bash

@@ -1,0 +1,48 @@
+# Large runtime assets — provided as volumes at runtime
+checkpoints/
+videos/
+outputs/
+
+# TRT engines are GPU-architecture-specific; user builds them inside container
+*.engine
+
+# Model weights and large binaries
+*.pth
+*.pt
+*.onnx
+*.safetensors
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+
+# Git history (not needed in image)
+.git/
+.gitignore
+
+# Output directories from local runs
+output_*/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Notebooks (optional; remove this line if you want them in the image)
+*.ipynb
+notebook/
+
+# Docker files themselves (avoid accidental recursive copy)
+Dockerfile
+docker-compose.yml
+.dockerignore
+docker/
