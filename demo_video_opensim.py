@@ -1,32 +1,41 @@
 #!/usr/bin/env python3
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """
-Fast SAM 3D Body – OpenSim Video Export
-========================================
-Matches SAM3D-OpenSim output format exactly.  Writes to <output_dir>/:
+Fast SAM 3D Body – OpenSim Export (video or photo)
+====================================================
+Accepts a video file OR a single photo.  Format is detected automatically
+from the file extension.  Writes to <output_dir>/:
 
-  markers_<name>_skeleton.mp4   — annotated video with 2D skeleton overlay
+  markers_<name>_skeleton.mp4/.jpg — annotated frame(s) with 2D skeleton overlay
   markers_<name>.trc            — 73 markers in mm (Y-up, OpenSim coords)
   markers_<name>_ik.mot         — joint angles from OpenSim IK solver (40 DOF)
   markers_<name>_model.osim     — Pose2Sim_Simple body model for IK
   markers_<name>.glb            — animated skeleton GLB (Blender/rigify)
   markers_<name>_mesh.glb       — full body mesh GLB (--no_mesh_glb to skip)
-  inference_meta.json           — video metadata
+  inference_meta.json           — input metadata
   video_outputs.json            — per-frame raw 3D keypoints
   processing_report.json        — pipeline summary and timings
 
 Usage:
     conda activate fast_sam_3d_body
 
+    # Video
     SKIP_KEYPOINT_PROMPT=1 FOV_TRT=1 FOV_FAST=1 FOV_MODEL=s FOV_LEVEL=0 \\
     USE_TRT_BACKBONE=1 USE_COMPILE=1 DECODER_COMPILE=1 COMPILE_MODE=reduce-overhead \\
     MHR_NO_CORRECTIVES=1 GPU_HAND_PREP=1 BODY_INTERM_PRED_LAYERS=0,2 \\
     DEBUG_NAN=0 PARALLEL_DECODERS=0 COMPILE_WARMUP_BATCH_SIZES=1 \\
     python demo_video_opensim.py \\
-        --video_path ./videos/aitor_garden_walk.mp4 \\
+        --input ./videos/aitor_garden_walk.mp4 \\
         --detector yolo_pose \\
         --detector_model checkpoints/yolo/yolo11m-pose.engine \\
         --fx 1371
+
+    # Photo
+    python demo_video_opensim.py \\
+        --input ./photos/pose.jpg \\
+        --detector yolo_pose \\
+        --detector_model checkpoints/yolo/yolo11m-pose.engine \\
+        --person_height 1.75
 
 Coordinate system (TRC)
 ------------------------
@@ -79,6 +88,15 @@ from sam_3d_body.export.opensim_ik_runner import run_ik, run_scale_tool
 # so that MHR armature spine joints (c_spine0–3, c_neck, c_head) actually
 # drive individual intervertebral DOFs in OpenSim IK.
 _MODEL_TEMPLATE = os.path.join(parent_dir, "assets", "pose2sim_wholebody_model.osim")
+
+_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif', '.webp'}
+# Number of duplicate frames used when processing a single photo.
+# 30 frames @ 30 fps = 1 s — enough for the Butterworth low-pass filter.
+_PHOTO_N_FRAMES = 30
+_PHOTO_FPS = 30.0
+
+def _is_image(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in _IMAGE_EXTENSIONS
 
 
 
@@ -184,12 +202,41 @@ def draw_results_on_frame(img_bgr, outputs, visualizer):
     return out
 
 
+def _read_first_frame(input_path: str, is_image: bool):
+    """Read the first BGR frame from a video or image file."""
+    if is_image:
+        return cv2.imread(input_path)
+    cap = cv2.VideoCapture(input_path)
+    ret, frame = cap.read()
+    cap.release()
+    return frame if ret else None
+
+
+def _get_first_frame_bbox(estimator, frame_bgr, args):
+    """Run YOLO on first frame and return largest person bbox, or None."""
+    try:
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        outputs = estimator.process_one_image(
+            rgb,
+            hand_box_source=args.hand_box_source,
+            inference_type=args.inference_type,
+        )
+        if outputs and "bbox" in outputs[0]:
+            return tuple(outputs[0]["bbox"])
+    except Exception:
+        pass
+    return None
+
+
 def main(args):
+    input_path = args.input
+    input_is_image = _is_image(input_path)
+
     # Auto-generate timestamped output directory (matches SAM3D-OpenSim convention)
     if args.output_dir is None:
-        video_name_raw = os.path.splitext(os.path.basename(args.video_path))[0]
+        input_name_raw = os.path.splitext(os.path.basename(input_path))[0]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.output_dir = f"output_{timestamp}_{video_name_raw}"
+        args.output_dir = f"output_{timestamp}_{input_name_raw}"
     os.makedirs(args.output_dir, exist_ok=True)
 
     # ── Camera intrinsics ─────────────────────────────────────────────────────
@@ -216,28 +263,11 @@ def main(args):
     visualizer.set_pose_meta(mhr70_pose_info)
     print(f"Model loaded in {time.time() - t_load:.1f}s")
 
-    # ── Video I/O ─────────────────────────────────────────────────────────────
-    cap = cv2.VideoCapture(args.video_path)
-    if not cap.isOpened():
-        print(f"Error: cannot open {args.video_path}")
-        return
-
-    fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    if args.max_frames > 0:
-        total = min(total, args.max_frames)
-
-    frame_step = max(1, round(fps / args.target_fps)) if args.target_fps > 0 else 1
-    out_fps    = fps / frame_step
-
-    video_name = os.path.splitext(os.path.basename(args.video_path))[0]
-    prefix = f"markers_{video_name}"
+    # ── Input I/O ─────────────────────────────────────────────────────────────
+    input_name = os.path.splitext(os.path.basename(input_path))[0]
+    prefix = f"markers_{input_name}"
 
     # Output paths — mirror SAM3D-OpenSim naming convention
-    vid_path       = os.path.join(args.output_dir, f"{prefix}_skeleton.mp4")
     trc_path       = os.path.join(args.output_dir, f"{prefix}.trc")
     ik_mot_path    = os.path.join(args.output_dir, f"{prefix}_ik.mot")
     errors_path    = os.path.join(args.output_dir, "_ik_marker_errors.sto")
@@ -246,18 +276,30 @@ def main(args):
     meta_path      = os.path.join(args.output_dir, "inference_meta.json")
     outputs_path   = os.path.join(args.output_dir, "video_outputs.json")
 
-    writer = cv2.VideoWriter(
-        vid_path, cv2.VideoWriter_fourcc(*"mp4v"), out_fps, (width, height)
-    )
+    # ── MoGe floor-plane estimation (once, before frame loop) ─────────────────
+    moge_floor_angle = None
+    if args.floor_moge and not args.no_lean_fix:
+        fov_est = getattr(estimator, "fov_estimator", None)
+        if fov_est is not None:
+            print("\nEstimating floor plane from MoGe depth (frame 0)...")
+            t_moge = time.time()
+            _first_frame = _read_first_frame(input_path, input_is_image)
+            if _first_frame is not None:
+                _pts, _mask = fov_est.get_depth_points(
+                    cv2.cvtColor(_first_frame, cv2.COLOR_BGR2RGB)
+                )
+                _bbox = _get_first_frame_bbox(estimator, _first_frame, args)
+                _orig_hw = (_first_frame.shape[0], _first_frame.shape[1])
+                moge_floor_angle = CoordinateTransformer.floor_angle_from_moge_points(
+                    _pts, _mask, person_bbox=_bbox, orig_hw=_orig_hw
+                )
+                print(f"  MoGe floor tilt: {moge_floor_angle:+.2f}° "
+                      f"(took {time.time() - t_moge:.2f}s)")
+            else:
+                print("  [floor_moge] Could not read first frame — skipping.")
+        else:
+            print("  [floor_moge] No FOV estimator available — skipping.")
 
-    print(f"\nVideo: {width}x{height} @ {fps:.1f}fps | {total} frames")
-    print(f"Frame step: {frame_step} | Output: {args.output_dir}\n")
-
-    t_start = time.time()
-
-    # ── Per-frame processing ──────────────────────────────────────────────────
-    frame_idx       = 0
-    processed       = 0
     timestamps      = []
     all_kpts_raw    = []   # [N_frames] of [70, 3] camera-space kpts, or None
     all_cam_t       = []   # [N_frames] of [3], or None
@@ -266,17 +308,23 @@ def main(args):
     all_raw_outputs = []   # for video_outputs.json
     inference_times = []
 
-    while cap.isOpened():
-        ret, frame_bgr = cap.read()
-        if not ret:
-            break
-        if args.max_frames > 0 and frame_idx >= args.max_frames:
-            break
-        if frame_idx % frame_step != 0:
-            frame_idx += 1
-            continue
+    t_start = time.time()
 
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    if input_is_image:
+        # ── Single photo ──────────────────────────────────────────────────────
+        img_bgr = cv2.imread(input_path)
+        if img_bgr is None:
+            print(f"Error: cannot open image {input_path}")
+            return
+        height, width = img_bgr.shape[:2]
+        fps     = _PHOTO_FPS
+        out_fps = _PHOTO_FPS
+        total   = _PHOTO_N_FRAMES
+        processed = 1
+
+        vid_path = os.path.join(args.output_dir, f"{prefix}_skeleton.jpg")
+
+        print(f"\nPhoto: {width}x{height} | Output: {args.output_dir}\n")
 
         frame_cam_int = None
         if cam_int is not None:
@@ -288,6 +336,7 @@ def main(args):
 
         t0 = time.time()
         try:
+            frame_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
             outputs = estimator.process_one_image(
                 frame_rgb,
                 hand_box_source=args.hand_box_source,
@@ -295,48 +344,41 @@ def main(args):
                 cam_int=frame_cam_int,
             )
         except Exception as e:
-            print(f"  Frame {frame_idx}: inference error — {e}")
-            writer.write(frame_bgr)
-            timestamps.append(frame_idx / fps)
-            all_kpts_raw.append(None)
-            all_cam_t.append(None)
-            all_verts.append(None)
-            all_joint_coords.append(None)
-            all_raw_outputs.append({"frame": f"frame_{frame_idx:06d}.jpg", "outputs": []})
-            frame_idx += 1
-            processed += 1
-            continue
+            print(f"  Inference error — {e}")
+            outputs = []
 
         inf_t = time.time() - t0
         inference_times.append(inf_t)
+        print(f"  Inference: {inf_t:.2f}s | {len(outputs)} person(s)", flush=True)
 
-        # Pick the largest person (most confident detection)
+        # Save annotated image
+        vis_frame = draw_results_on_frame(img_bgr, outputs, visualizer)
+        cv2.imwrite(vid_path, vis_frame)
+
         person = outputs[0] if outputs else None
 
-        # Collect raw keypoints, camera translation, and joint coords for this frame
+        kpts_val  = None
+        cam_t_val = None
+        jc_val    = None
+        verts_val = None
+
         if person is not None:
-            kpts  = person.get("pred_keypoints_3d")   # [70, 3] camera space
-            cam_t = person.get("pred_cam_t")           # [3]
-            if kpts is not None and cam_t is not None and not np.any(np.isnan(kpts)):
-                all_kpts_raw.append(kpts.copy())
-                all_cam_t.append(cam_t.copy())
-            else:
-                all_kpts_raw.append(None)
-                all_cam_t.append(None)
-            jc = person.get("pred_joint_coords")       # [127, 3] camera space
+            k = person.get("pred_keypoints_3d")
+            t_ = person.get("pred_cam_t")
+            if k is not None and t_ is not None and not np.any(np.isnan(k)):
+                kpts_val  = k.copy()
+                cam_t_val = t_.copy()
+            jc = person.get("pred_joint_coords")
             if jc is not None and not np.any(np.isnan(jc)):
-                all_joint_coords.append(jc.copy())
-            else:
-                all_joint_coords.append(None)
-        else:
-            all_kpts_raw.append(None)
-            all_cam_t.append(None)
-            all_joint_coords.append(None)
+                jc_val = jc.copy()
+            if not args.no_mesh_glb:
+                v = person.get("pred_vertices")
+                t_ = person.get("pred_cam_t")
+                if v is not None and t_ is not None and not np.any(np.isnan(v)):
+                    verts_val = (v + t_[None, :]).astype(np.float32)
 
-        timestamps.append(frame_idx / fps)
-
-        # Collect raw outputs for video_outputs.json
-        frame_out = {"frame": f"frame_{frame_idx:06d}.jpg", "outputs": []}
+        # Build raw outputs entry (single frame)
+        frame_out = {"frame": "frame_000000.jpg", "outputs": []}
         for p in outputs:
             entry: dict = {}
             if "bbox" in p:
@@ -346,41 +388,166 @@ def main(args):
             if "pred_keypoints_3d" in p and p["pred_keypoints_3d"] is not None:
                 entry["pred_keypoints_3d"] = p["pred_keypoints_3d"].tolist()
             frame_out["outputs"].append(entry)
+
+        # Duplicate the single frame _PHOTO_N_FRAMES times so post-processing
+        # (interpolation + Butterworth filter) has enough samples to operate on.
+        for i in range(_PHOTO_N_FRAMES):
+            timestamps.append(i / fps)
+            all_kpts_raw.append(kpts_val)
+            all_cam_t.append(cam_t_val)
+            all_joint_coords.append(jc_val)
+            all_verts.append(verts_val)
         all_raw_outputs.append(frame_out)
 
-        # Collect mesh vertices for mesh GLB
-        if not args.no_mesh_glb and person is not None:
-            verts = person.get("pred_vertices")
-            cam_t = person.get("pred_cam_t")
-            if verts is not None and cam_t is not None and not np.any(np.isnan(verts)):
-                v_world = verts + cam_t[None, :]
-                all_verts.append(v_world.astype(np.float32))
-            else:
-                all_verts.append(None)
-        else:
-            all_verts.append(None)
+        print(f"\nDone! 1 photo processed.")
+        print(f"Inference: {inf_t:.2f}s")
 
-        vis_frame = draw_results_on_frame(frame_bgr, outputs, visualizer)
-        writer.write(vis_frame)
+    else:
+        # ── Video ─────────────────────────────────────────────────────────────
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            print(f"Error: cannot open {input_path}")
+            return
 
-        processed += 1
-        avg_fps = 1.0 / (sum(inference_times) / len(inference_times))
-        detected = len(outputs)
-        print(
-            f"  [{processed}/{total // frame_step}] frame {frame_idx:5d} | "
-            f"{inf_t:.2f}s | {detected} person(s) | avg {avg_fps:.2f} fps",
-            flush=True,
+        fps    = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        if args.max_frames > 0:
+            total = min(total, args.max_frames)
+
+        frame_step = max(1, round(fps / args.target_fps)) if args.target_fps > 0 else 1
+        out_fps    = fps / frame_step
+
+        vid_path = os.path.join(args.output_dir, f"{prefix}_skeleton.mp4")
+
+        writer = cv2.VideoWriter(
+            vid_path, cv2.VideoWriter_fourcc(*"mp4v"), out_fps, (width, height)
         )
 
-        frame_idx += 1
+        print(f"\nVideo: {width}x{height} @ {fps:.1f}fps | {total} frames")
+        print(f"Frame step: {frame_step} | Output: {args.output_dir}\n")
 
-    cap.release()
-    writer.release()
+        # ── Per-frame processing ──────────────────────────────────────────────
+        frame_idx = 0
+        processed = 0
 
-    print(f"\nDone! {processed} frames processed.")
-    if inference_times:
-        avg = sum(inference_times) / len(inference_times)
-        print(f"Avg inference: {avg:.2f}s/frame ({1/avg:.2f} fps)")
+        while cap.isOpened():
+            ret, frame_bgr = cap.read()
+            if not ret:
+                break
+            if args.max_frames > 0 and frame_idx >= args.max_frames:
+                break
+            if frame_idx % frame_step != 0:
+                frame_idx += 1
+                continue
+
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+            frame_cam_int = None
+            if cam_int is not None:
+                frame_cam_int = cam_int.clone()
+                if args.cx is None:
+                    frame_cam_int[0, 0, 2] = width / 2.0
+                if args.cy is None:
+                    frame_cam_int[0, 1, 2] = height / 2.0
+
+            t0 = time.time()
+            try:
+                outputs = estimator.process_one_image(
+                    frame_rgb,
+                    hand_box_source=args.hand_box_source,
+                    inference_type=args.inference_type,
+                    cam_int=frame_cam_int,
+                )
+            except Exception as e:
+                print(f"  Frame {frame_idx}: inference error — {e}")
+                writer.write(frame_bgr)
+                timestamps.append(frame_idx / fps)
+                all_kpts_raw.append(None)
+                all_cam_t.append(None)
+                all_verts.append(None)
+                all_joint_coords.append(None)
+                all_raw_outputs.append({"frame": f"frame_{frame_idx:06d}.jpg", "outputs": []})
+                frame_idx += 1
+                processed += 1
+                continue
+
+            inf_t = time.time() - t0
+            inference_times.append(inf_t)
+
+            # Pick the largest person (most confident detection)
+            person = outputs[0] if outputs else None
+
+            # Collect raw keypoints, camera translation, and joint coords for this frame
+            if person is not None:
+                kpts  = person.get("pred_keypoints_3d")   # [70, 3] camera space
+                cam_t = person.get("pred_cam_t")           # [3]
+                if kpts is not None and cam_t is not None and not np.any(np.isnan(kpts)):
+                    all_kpts_raw.append(kpts.copy())
+                    all_cam_t.append(cam_t.copy())
+                else:
+                    all_kpts_raw.append(None)
+                    all_cam_t.append(None)
+                jc = person.get("pred_joint_coords")       # [127, 3] camera space
+                if jc is not None and not np.any(np.isnan(jc)):
+                    all_joint_coords.append(jc.copy())
+                else:
+                    all_joint_coords.append(None)
+            else:
+                all_kpts_raw.append(None)
+                all_cam_t.append(None)
+                all_joint_coords.append(None)
+
+            timestamps.append(frame_idx / fps)
+
+            # Collect raw outputs for video_outputs.json
+            frame_out = {"frame": f"frame_{frame_idx:06d}.jpg", "outputs": []}
+            for p in outputs:
+                entry: dict = {}
+                if "bbox" in p:
+                    entry["bbox"] = [float(x) for x in p["bbox"]]
+                if "pred_cam_t" in p and p["pred_cam_t"] is not None:
+                    entry["focal_length"] = float(p.get("focal_length", 0.0))
+                if "pred_keypoints_3d" in p and p["pred_keypoints_3d"] is not None:
+                    entry["pred_keypoints_3d"] = p["pred_keypoints_3d"].tolist()
+                frame_out["outputs"].append(entry)
+            all_raw_outputs.append(frame_out)
+
+            # Collect mesh vertices for mesh GLB
+            if not args.no_mesh_glb and person is not None:
+                verts = person.get("pred_vertices")
+                cam_t = person.get("pred_cam_t")
+                if verts is not None and cam_t is not None and not np.any(np.isnan(verts)):
+                    v_world = verts + cam_t[None, :]
+                    all_verts.append(v_world.astype(np.float32))
+                else:
+                    all_verts.append(None)
+            else:
+                all_verts.append(None)
+
+            vis_frame = draw_results_on_frame(frame_bgr, outputs, visualizer)
+            writer.write(vis_frame)
+
+            processed += 1
+            avg_fps = 1.0 / (sum(inference_times) / len(inference_times))
+            detected = len(outputs)
+            print(
+                f"  [{processed}/{total // frame_step}] frame {frame_idx:5d} | "
+                f"{inf_t:.2f}s | {detected} person(s) | avg {avg_fps:.2f} fps",
+                flush=True,
+            )
+
+            frame_idx += 1
+
+        cap.release()
+        writer.release()
+
+        print(f"\nDone! {processed} frames processed.")
+        if inference_times:
+            avg = sum(inference_times) / len(inference_times)
+            print(f"Avg inference: {avg:.2f}s/frame ({1/avg:.2f} fps)")
 
     # ── Build raw keypoint and jcoords arrays (NaN for missing frames) ─────────
     N = len(timestamps)
@@ -430,10 +597,16 @@ def main(args):
         center_pelvis=True,
         align_to_ground=True,
         apply_global_translation=True,
+        correct_floor_lean=not args.no_lean_fix,
+        floor_angle=moge_floor_angle,
     )
 
-    # 2b. Correct systematic forward lean (matches SAM3D-OpenSim default)
-    if not args.no_lean_fix:
+    # 2b. Spine-based forward-lean correction (runs after floor-plane rotation above)
+    # Skip when --floor_moge is active: MoGe already handles the camera-pitch component;
+    # adding the spine correction on top causes overcorrection.
+    if not args.no_lean_fix and moge_floor_angle is None:
+        lean_angle = transformer._estimate_lean_angle(kpts_opensim)
+        print(f"  [spine lean] estimated spine lean {lean_angle:+.2f}°")
         kpts_opensim, jcoords_opensim = transformer.correct_forward_lean(
             kpts_opensim, jcoords=jcoords_opensim
         )
@@ -465,10 +638,11 @@ def main(args):
     # Save metadata JSONs
     inference_time = time.time() - t_start
     meta = {
-        "input_video": os.path.abspath(args.video_path),
+        "input": os.path.abspath(input_path),
+        "input_type": "image" if input_is_image else "video",
         "fps": fps,
         "num_frames": total,
-        "video_info": {
+        "input_info": {
             "fps": fps,
             "frame_count": total,
             "width": width,
@@ -531,10 +705,11 @@ def main(args):
     report_path = os.path.join(args.output_dir, "processing_report.json")
     total_time = time.time() - t_start
     report = {
-        "input": os.path.abspath(args.video_path),
+        "input": os.path.abspath(input_path),
+        "input_type": "image" if input_is_image else "video",
         "output_dir": args.output_dir,
         "subject": {"height": subject_height},
-        "video_info": {"fps": fps, "frame_count": total, "width": width, "height": height},
+        "input_info": {"fps": fps, "frame_count": total, "width": width, "height": height},
         "processing": {
             "fps": out_fps,
             "num_frames": processed,
@@ -555,7 +730,7 @@ def main(args):
 
     print(f"\nOutput folder: {args.output_dir}")
     print("\nOutput files:")
-    print(f"  Video:               {os.path.basename(vid_path)}")
+    print(f"  {'Photo' if input_is_image else 'Video'}:               {os.path.basename(vid_path)}")
     print(f"  TRC (73 markers/mm): {os.path.basename(trc_path)}")
     print(f"  IK MOT (40 DOF):     {os.path.basename(ik_mot_path)}" + (" ✓" if ik_ok else " (skipped)"))
     print(f"  Body model:          {os.path.basename(osim_path)}")
@@ -575,8 +750,12 @@ OpenSim workflow:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fast SAM 3D Body – OpenSim Export")
-    parser.add_argument("--video_path", default="./videos/aitor_garden_walk.mp4")
+    parser = argparse.ArgumentParser(description="Fast SAM 3D Body – OpenSim Export (video or photo)")
+    parser.add_argument("--input", default="./videos/aitor_garden_walk.mp4",
+                        help="Path to input video or photo (jpg/png/bmp/…). "
+                             "Format is detected automatically from the file extension.")
+    # Backwards-compatible alias
+    parser.add_argument("--video_path", dest="input", help=argparse.SUPPRESS)
     parser.add_argument("--output_dir", default=None,
                         help="Output directory. Default: auto-generated as "
                              "output_YYYYMMDD_HHMMSS_<videoname> next to the video.")
@@ -597,6 +776,10 @@ if __name__ == "__main__":
                         help="Skip full body mesh GLB export (saves ~185 MB for long videos)")
     parser.add_argument("--no_lean_fix", action="store_true",
                         help="Skip automatic forward-lean correction")
+    parser.add_argument("--floor_moge", action="store_true",
+                        help="Estimate floor plane from MoGe depth on the first video frame "
+                             "and use its camera-pitch angle to correct forward lean. "
+                             "Zero per-frame FPS cost. Requires MoGe to be available.")
     parser.add_argument("--lean_cam_pitch_fix", action="store_true",
                         help="Experimental: correct residual forward lean by estimating "
                              "camera pitch from the cam_t trajectory (linear regression). "

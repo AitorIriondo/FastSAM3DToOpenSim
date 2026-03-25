@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Video + GLB Sync Viewer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0f0f1a; color: #eee; font-family: system-ui, sans-serif;
+       overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+
+/* ── Two-panel layout ────────────────────────────────────────────────────── */
+#panels { flex: 1; display: flex; min-height: 0; }
+
+#video-panel { flex: 1; position: relative; background: #050510;
+               border-right: 1px solid #1a1a2e;
+               display: flex; align-items: center; justify-content: center; overflow: hidden; }
+#video { width: 100%; height: 100%; object-fit: contain; }
+#video-drop { position: absolute; inset: 0; display: flex; flex-direction: column;
+              align-items: center; justify-content: center; gap: 14px;
+              background: #050510; pointer-events: auto; }
+#video-drop.hidden { display: none; }
+#video-drop h2 { font-size: 22px; color: #7ab8f5; }
+#video-drop p  { color: #666; font-size: 13px; }
+
+#glb-panel { flex: 1; position: relative; }
+#glb-drop  { position: absolute; inset: 0; display: flex; flex-direction: column;
+              align-items: center; justify-content: center; gap: 14px;
+              background: #0f0f1a; pointer-events: auto; z-index: 5; }
+#glb-drop.hidden { display: none; }
+#glb-drop h2 { font-size: 22px; color: #7ab8f5; }
+#glb-drop p  { color: #666; font-size: 13px; }
+
+/* Drag-over highlight */
+.dragover { outline: 2px dashed #3a78c9; outline-offset: -6px; }
+
+/* Loading overlay inside GLB panel */
+#loading { position: absolute; inset: 0; display: flex; flex-direction: column;
+           align-items: center; justify-content: center; gap: 12px;
+           background: rgba(10,10,20,.93); z-index: 20; }
+#loading.hidden { display: none; }
+#loading p { color: #7ab8f5; font-size: 15px; }
+#progress { width: 260px; height: 5px; background: #222; border-radius: 3px; overflow: hidden; }
+#progressBar { height: 100%; background: #3a78c9; transition: width .1s; }
+
+/* GLB info overlay */
+#glb-info { position: absolute; top: 8px; right: 10px; font-size: 11px; color: #555;
+            text-align: right; line-height: 1.8; pointer-events: none; z-index: 4; }
+
+/* ── Bottom controls ─────────────────────────────────────────────────────── */
+#controls { height: 54px; background: #080814; border-top: 1px solid #1a1a2e;
+            display: flex; align-items: center; gap: 10px; padding: 0 18px;
+            flex-shrink: 0; }
+
+.load-btn { padding: 5px 13px; background: #2a3a5a; border: 1px solid #3a5080;
+            border-radius: 5px; color: #9ab8e0; font-size: 12px; cursor: pointer;
+            white-space: nowrap; }
+.load-btn:hover { background: #3a78c9; color: #fff; border-color: #3a78c9; }
+
+.sep { width: 1px; height: 24px; background: #222; flex-shrink: 0; }
+
+#playBtn { background: none; border: none; color: #eee; font-size: 22px;
+           cursor: pointer; line-height: 1; padding: 0 4px; flex-shrink: 0; }
+#scrubber { flex: 1; cursor: pointer; accent-color: #3a78c9; min-width: 0; }
+#timeLabel { font-size: 12px; color: #666; min-width: 110px; text-align: right;
+             white-space: nowrap; }
+
+/* ── Shared browse button style inside drop panels ───────────────────────── */
+.browse-btn { padding: 8px 22px; background: #3a78c9; border: none; border-radius: 6px;
+              color: white; font-size: 14px; cursor: pointer; }
+.browse-btn:hover { background: #4a90d9; }
+</style>
+</head>
+<body>
+
+<div id="panels">
+
+  <!-- Left: Video -->
+  <div id="video-panel">
+    <video id="video" preload="auto"></video>
+    <div id="video-drop">
+      <h2>🎬 Video</h2>
+      <p>Drop a video file here, or click to browse</p>
+      <button class="browse-btn" id="browseVideoBtn">Browse video…</button>
+      <input id="videoInput" type="file" accept="video/*" style="display:none">
+    </div>
+  </div>
+
+  <!-- Right: GLB -->
+  <div id="glb-panel">
+    <!-- Three.js canvas fills this panel -->
+    <div id="glb-drop">
+      <h2>🦴 GLB</h2>
+      <p>Drop a <code>*_mesh.glb</code> file here, or click to browse</p>
+      <button class="browse-btn" id="browseGlbBtn">Browse GLB…</button>
+      <input id="glbInput" type="file" accept=".glb" style="display:none">
+    </div>
+    <div id="loading" class="hidden">
+      <p id="loadMsg">Loading…</p>
+      <div id="progress"><div id="progressBar" style="width:0%"></div></div>
+    </div>
+    <div id="glb-info"></div>
+  </div>
+
+</div>
+
+<!-- Unified bottom controls -->
+<div id="controls">
+  <button class="load-btn" id="loadVideoBtn2">📹 Load Video</button>
+  <input id="videoInput2" type="file" accept="video/*" style="display:none">
+  <div class="sep"></div>
+  <button class="load-btn" id="loadGlbBtn2">📂 Load GLB</button>
+  <input id="glbInput2" type="file" accept=".glb" style="display:none">
+  <div class="sep"></div>
+  <button id="playBtn" title="Play / Pause">▶</button>
+  <input id="scrubber" type="range" min="0" max="10000" value="0" step="1">
+  <span id="timeLabel">0.0 / 0.0 s</span>
+</div>
+
+<script type="importmap">
+{"imports":{
+  "three":          "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+  "three/addons/":  "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+}}</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+
+// ── Three.js renderer in the GLB panel ───────────────────────────────────────
+const glbPanel  = document.getElementById('glb-panel');
+const renderer  = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+glbPanel.insertBefore(renderer.domElement, glbPanel.firstChild);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f0f1a);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x223344, 1.4));
+const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+sun.position.set(3, 6, 4);
+scene.add(sun);
+
+const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 200);
+camera.position.set(0, 1.2, -3.5);
+const orbitControls = new OrbitControls(camera, renderer.domElement);
+orbitControls.target.set(0, 0.9, 0);
+orbitControls.update();
+
+// Resize renderer whenever the GLB panel resizes
+function resizeGlb() {
+    const w = glbPanel.clientWidth, h = glbPanel.clientHeight;
+    if (w > 0 && h > 0) {
+        renderer.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+    }
+}
+new ResizeObserver(resizeGlb).observe(glbPanel);
+resizeGlb();
+
+// ── GLB utilities (same as viewer.html) ──────────────────────────────────────
+const CTYPES = {
+    5120: Int8Array, 5121: Uint8Array, 5122: Int16Array,
+    5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array,
+};
+const TSIZES = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 };
+
+function parseGLB(buf) {
+    const v = new DataView(buf);
+    if (v.getUint32(0, true) !== 0x46546C67) throw new Error('Not a GLB file');
+    const jsonLen = v.getUint32(12, true);
+    const gltf = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jsonLen)));
+    const binData = buf.slice(20 + jsonLen + 8);
+    return { gltf, binData };
+}
+
+async function decompressBufferViews(gltf, binData) {
+    if (!gltf.extensionsUsed?.includes('EXT_meshopt_compression')) return binData;
+    await MeshoptDecoder.ready;
+    const views = gltf.bufferViews;
+    const decompSizes = views.map(bv => {
+        const ext = bv.extensions?.EXT_meshopt_compression;
+        return ext ? ext.count * ext.byteStride : bv.byteLength;
+    });
+    const decompOffsets = decompSizes.reduce((acc, sz) => {
+        acc.push(acc[acc.length - 1] + sz); return acc;
+    }, [0]);
+    const newBuf = new ArrayBuffer(decompOffsets[views.length]);
+    const newU8  = new Uint8Array(newBuf);
+    for (let i = 0; i < views.length; i++) {
+        const bv  = views[i];
+        const ext = bv.extensions?.EXT_meshopt_compression;
+        if (ext) {
+            const src = new Uint8Array(binData, ext.byteOffset ?? 0, ext.byteLength);
+            const dst = new Uint8Array(ext.count * ext.byteStride);
+            if (ext.mode === 'TRIANGLES')      MeshoptDecoder.decodeIndexBuffer(dst, ext.count, ext.byteStride, src);
+            else if (ext.mode === 'INDICES')   MeshoptDecoder.decodeIndexSequence(dst, ext.count, ext.byteStride, src);
+            else {
+                MeshoptDecoder.decodeVertexBuffer(dst, ext.count, ext.byteStride, src);
+                if (ext.filter === 'EXPONENTIAL') MeshoptDecoder.decodeFilterExp(dst, ext.count, ext.byteStride);
+                else if (ext.filter === 'OCTAHEDRAL') MeshoptDecoder.decodeFilterOct(dst, ext.count, ext.byteStride);
+                else if (ext.filter === 'QUATERNION') MeshoptDecoder.decodeFilterQuat(dst, ext.count, ext.byteStride);
+            }
+            newU8.set(dst, decompOffsets[i]);
+            bv.byteOffset = decompOffsets[i]; bv.byteLength = ext.count * ext.byteStride;
+            bv.byteStride = ext.byteStride > 0 ? ext.byteStride : undefined;
+            delete bv.extensions;
+        } else {
+            const srcOff = bv.byteOffset ?? 0;
+            newU8.set(new Uint8Array(binData, srcOff, bv.byteLength), decompOffsets[i]);
+            bv.byteOffset = decompOffsets[i];
+        }
+    }
+    return newBuf;
+}
+
+function readAccessorAsF32(gltf, binData, idx) {
+    const acc  = gltf.accessors[idx];
+    const bv   = gltf.bufferViews[acc.bufferView];
+    const Type = CTYPES[acc.componentType];
+    const nc   = TSIZES[acc.type];
+    const off  = (bv.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+    const byteLen = acc.count * nc * Type.BYTES_PER_ELEMENT;
+    const tmp = new Uint8Array(byteLen);
+    tmp.set(new Uint8Array(binData, off, byteLen));
+    const raw = new Type(tmp.buffer);
+    if (Type === Float32Array) return raw;
+    const normScale = acc.normalized
+        ? { 5120: 1/127, 5121: 1/255, 5122: 1/32767, 5123: 1/65535 }[acc.componentType] ?? 1
+        : 1;
+    const out = new Float32Array(acc.count * nc);
+    for (let i = 0; i < out.length; i++) out[i] = raw[i] * normScale;
+    if (acc.normalized && acc.min && acc.max) {
+        for (let j = 0; j < nc; j++) {
+            const s = Math.max(Math.abs(acc.min[j]), Math.abs(acc.max[j]));
+            if (s > 0) for (let i = 0; i < acc.count; i++) out[i * nc + j] *= s;
+        }
+    }
+    return out;
+}
+
+function readAccessorRaw(gltf, binData, idx) {
+    const acc  = gltf.accessors[idx];
+    const bv   = gltf.bufferViews[acc.bufferView];
+    const Type = CTYPES[acc.componentType];
+    const nc   = TSIZES[acc.type];
+    const off  = (bv.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+    const byteLen = acc.count * nc * Type.BYTES_PER_ELEMENT;
+    const tmp = new Uint8Array(byteLen);
+    tmp.set(new Uint8Array(binData, off, byteLen));
+    return new Type(tmp.buffer);
+}
+
+// ── GLB animation state ───────────────────────────────────────────────────────
+let glbAnim       = null;   // { timestamps, nFrames, nVerts3, basePos, morphDeltas }
+let glbBodyMesh   = null;
+let glbPosAttr    = null;
+let glbOverlays   = [];     // {mesh, trans?, rot?, scl?}
+const _q = new THREE.Quaternion();
+
+function getFrame(timestamps, t) {
+    const n = timestamps.length;
+    if (t <= timestamps[0])   return 0;
+    if (t >= timestamps[n-1]) return n - 1;
+    let lo = 0, hi = n - 1;
+    while (lo < hi - 1) {
+        const mid = (lo + hi) >> 1;
+        if (timestamps[mid] <= t) lo = mid; else hi = mid;
+    }
+    return lo;
+}
+
+function updateGlbAtTime(t) {
+    if (!glbAnim) return;
+    const { timestamps, nVerts3, basePos, morphDeltas } = glbAnim;
+    const dur   = timestamps[timestamps.length - 1];
+    const tLoop = dur > 0 ? t % dur : 0;
+    const frame = getFrame(timestamps, tLoop);
+
+    if (frame === 0) {
+        glbPosAttr.array.set(basePos);
+    } else {
+        const dOff = (frame - 1) * nVerts3;
+        const dst  = glbPosAttr.array;
+        const del  = morphDeltas;
+        for (let i = 0; i < nVerts3; i++) dst[i] = basePos[i] + del[dOff + i];
+    }
+    glbPosAttr.needsUpdate = true;
+
+    for (const o of glbOverlays) {
+        if (o.trans) { const i3 = frame * 3; o.mesh.position.set(o.trans[i3], o.trans[i3+1], o.trans[i3+2]); }
+        if (o.rot)   { const i4 = frame * 4; _q.set(o.rot[i4], o.rot[i4+1], o.rot[i4+2], o.rot[i4+3]); o.mesh.quaternion.copy(_q); }
+        if (o.scl)   { const i3 = frame * 3; o.mesh.scale.set(o.scl[i3], o.scl[i3+1], o.scl[i3+2]); }
+    }
+}
+
+// ── Load GLB ──────────────────────────────────────────────────────────────────
+async function loadGLB(buffer) {
+    const loadEl  = document.getElementById('loading');
+    const loadMsg = document.getElementById('loadMsg');
+    const progBar = document.getElementById('progressBar');
+    loadEl.classList.remove('hidden');
+
+    const tick = (msg, pct) => {
+        loadMsg.textContent = msg;
+        progBar.style.width = pct + '%';
+        return new Promise(r => setTimeout(r, 20));
+    };
+
+    await tick('Parsing GLB…', 5);
+    const { gltf, binData: rawBin } = parseGLB(buffer);
+
+    await tick('Decompressing buffers…', 8);
+    const binData = await decompressBufferViews(gltf, rawBin);
+
+    const prim    = gltf.meshes[0].primitives[0];
+    const targets = prim.targets ?? [];
+    const nMorphs = targets.length;
+    const nFrames = nMorphs + 1;
+
+    await tick('Reading base mesh…', 12);
+    const basePos = new Float32Array(readAccessorAsF32(gltf, binData, prim.attributes.POSITION));
+    const rawIdx  = readAccessorRaw(gltf, binData, prim.indices);
+    const indices = rawIdx instanceof Uint32Array ? rawIdx : new Uint32Array(rawIdx);
+    const nVerts3 = basePos.length;
+
+    await tick(`Loading ${nMorphs} morph targets…`, 15);
+    const morphDeltas = new Float32Array(nMorphs * nVerts3);
+    for (let m = 0; m < nMorphs; m++) {
+        const d = readAccessorAsF32(gltf, binData, targets[m].POSITION);
+        morphDeltas.set(d, m * nVerts3);
+        if (m % 100 === 0) await tick(`Loading morph targets… ${m}/${nMorphs}`, 15 + 70 * m / nMorphs);
+    }
+
+    await tick('Building scene…', 88);
+
+    // Body mesh
+    const geo = new THREE.BufferGeometry();
+    glbPosAttr = new THREE.BufferAttribute(new Float32Array(basePos), 3);
+    geo.setAttribute('position', glbPosAttr);
+    geo.setIndex(new THREE.BufferAttribute(indices, 1));
+    geo.computeVertexNormals();
+
+    const matDef = gltf.materials?.[prim.material];
+    const pbr    = matDef?.pbrMetallicRoughness ?? {};
+    const [r, g, b, a] = pbr.baseColorFactor ?? [0.45, 0.62, 0.82, 0.38];
+    const bodyMat = new THREE.MeshPhongMaterial({
+        color: new THREE.Color(r, g, b), transparent: true, opacity: a,
+        side: THREE.DoubleSide, depthWrite: false,
+    });
+
+    if (glbBodyMesh) scene.remove(glbBodyMesh);
+    glbBodyMesh = new THREE.Mesh(geo, bodyMat);
+    scene.add(glbBodyMesh);
+
+    // Animation timestamps
+    const animDef = gltf.animations?.[0];
+    let timestamps = null;
+    if (animDef) {
+        const wCh = animDef.channels.find(c => c.target.path === 'weights');
+        if (wCh) timestamps = Array.from(readAccessorAsF32(gltf, binData, animDef.samplers[wCh.sampler].input));
+    }
+    if (!timestamps || timestamps.length !== nFrames) {
+        timestamps = Array.from({ length: nFrames }, (_, i) => i / 30);
+    }
+
+    // Overlay nodes (joints / bones)
+    for (const o of glbOverlays) scene.remove(o.mesh);
+    glbOverlays = [];
+    const sphGeo = new THREE.SphereGeometry(1, 8, 5);
+    const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 6);
+    const nodeData = {};
+    if (animDef) {
+        for (const ch of animDef.channels) {
+            if (ch.target.node === 0) continue;
+            const n = ch.target.node;
+            if (!nodeData[n]) nodeData[n] = {};
+            nodeData[n][ch.target.path] = readAccessorAsF32(gltf, binData, animDef.samplers[ch.sampler].output);
+        }
+    }
+    for (const [nIdxStr, ch] of Object.entries(nodeData)) {
+        const nIdx  = +nIdxStr;
+        const node  = gltf.nodes?.[nIdx];
+        const mIdx  = node?.mesh;
+        const mPrim = mIdx != null ? gltf.meshes?.[mIdx]?.primitives?.[0] : null;
+        const npbr  = gltf.materials?.[mPrim?.material]?.pbrMetallicRoughness ?? {};
+        const [nr, ng, nb] = npbr.baseColorFactor ?? [1, 1, 1, 1];
+        const mat   = new THREE.MeshPhongMaterial({ color: new THREE.Color(nr, ng, nb) });
+        const isBone = ch.translation && ch.rotation && ch.scale;
+        const mesh  = new THREE.Mesh(isBone ? cylGeo : sphGeo, mat);
+        if (!isBone) { const s = node?.scale ?? [0.012, 0.012, 0.012]; mesh.scale.set(s[0], s[1], s[2]); }
+        scene.add(mesh);
+        glbOverlays.push({ mesh, trans: ch.translation, rot: ch.rotation, scl: ch.scale });
+    }
+
+    // Finalise
+    glbAnim = { nFrames, nVerts3, basePos, morphDeltas, timestamps };
+    updateGlbAtTime(0);
+
+    const dur = timestamps[timestamps.length - 1].toFixed(1);
+    document.getElementById('glb-info').textContent =
+        `${nFrames} frames · ${dur}s · ${(buffer.byteLength / 1e6).toFixed(1)} MB`;
+    document.getElementById('glb-drop').classList.add('hidden');
+
+    await tick('Done', 100);
+    loadEl.classList.add('hidden');
+
+    // Refresh scrubber max to reflect new GLB duration
+    refreshDuration();
+}
+
+// ── Video element ─────────────────────────────────────────────────────────────
+const video   = document.getElementById('video');
+let videoReady = false;  // true once a video src is loaded
+
+function loadVideoFile(file) {
+    const url = URL.createObjectURL(file);
+    video.src = url;
+    video.load();
+    video.addEventListener('loadedmetadata', () => {
+        document.getElementById('video-drop').classList.add('hidden');
+        videoReady = true;
+        refreshDuration();
+    }, { once: true });
+}
+
+// ── Playback state ────────────────────────────────────────────────────────────
+let playing   = false;
+let animTime  = 0;   // used only when no video is loaded (GLB-only mode)
+let lastRafT  = null;
+
+function totalDuration() {
+    const glbDur   = glbAnim ? glbAnim.timestamps[glbAnim.timestamps.length - 1] : 0;
+    const videoDur = videoReady ? (video.duration || 0) : 0;
+    return Math.max(glbDur, videoDur);
+}
+
+function refreshDuration() {
+    // nothing extra needed — render loop reads it live
+}
+
+function fmt(s) {
+    const m = Math.floor(s / 60);
+    return m + ':' + String(Math.floor(s % 60)).padStart(2, '0') + '.' + String(Math.floor((s % 1) * 10));
+}
+
+function setPlaying(v) {
+    playing = v;
+    document.getElementById('playBtn').textContent = playing ? '⏸' : '▶';
+    if (videoReady) {
+        if (playing) video.play().catch(() => {});
+        else          video.pause();
+    }
+    if (playing) lastRafT = null;
+}
+
+// ── Unified scrubber ──────────────────────────────────────────────────────────
+const scrubber  = document.getElementById('scrubber');
+const timeLabel = document.getElementById('timeLabel');
+
+scrubber.addEventListener('input', () => {
+    const dur = totalDuration();
+    if (dur <= 0) return;
+    const t = (scrubber.value / 10000) * dur;
+    if (videoReady) {
+        video.currentTime = t;
+    } else {
+        animTime = t;
+        updateGlbAtTime(animTime);
+    }
+});
+
+// When video seeking is done, update GLB to match
+video.addEventListener('seeked', () => {
+    if (!playing) updateGlbAtTime(video.currentTime);
+});
+
+video.addEventListener('ended', () => {
+    setPlaying(false);
+    // Leave GLB at last frame
+});
+
+// ── Render loop ───────────────────────────────────────────────────────────────
+renderer.setAnimationLoop(rafT => {
+    // Determine current time
+    let t;
+    if (videoReady) {
+        t = video.currentTime;
+    } else {
+        const dt = (lastRafT == null) ? 0 : (rafT - lastRafT) / 1000;
+        lastRafT = rafT;
+        if (playing && glbAnim) {
+            const dur = glbAnim.timestamps[glbAnim.timestamps.length - 1];
+            animTime = (animTime + dt) % dur;
+        }
+        t = animTime;
+    }
+    lastRafT = rafT;
+
+    // Drive GLB
+    if (glbAnim) updateGlbAtTime(t);
+
+    // Update scrubber + label
+    const dur = totalDuration();
+    if (dur > 0) {
+        scrubber.value = Math.round((t / dur) * 10000);
+        timeLabel.textContent = fmt(t) + ' / ' + fmt(dur);
+    }
+
+    orbitControls.update();
+    renderer.render(scene, camera);
+});
+
+// ── Play / Pause button ───────────────────────────────────────────────────────
+document.getElementById('playBtn').addEventListener('click', () => setPlaying(!playing));
+
+// Space bar play/pause
+document.addEventListener('keydown', e => {
+    if (e.code === 'Space' && e.target.tagName !== 'INPUT') {
+        e.preventDefault();
+        setPlaying(!playing);
+    }
+});
+
+// ── File loading — video ──────────────────────────────────────────────────────
+function wireVideoInput(inputEl) {
+    inputEl.addEventListener('change', e => {
+        const f = e.target.files[0];
+        if (f) loadVideoFile(f);
+        inputEl.value = '';
+    });
+}
+document.getElementById('browseVideoBtn').addEventListener('click', () =>
+    document.getElementById('videoInput').click());
+wireVideoInput(document.getElementById('videoInput'));
+
+document.getElementById('loadVideoBtn2').addEventListener('click', () =>
+    document.getElementById('videoInput2').click());
+wireVideoInput(document.getElementById('videoInput2'));
+
+// ── File loading — GLB ────────────────────────────────────────────────────────
+function wireGlbInput(inputEl) {
+    inputEl.addEventListener('change', e => {
+        const f = e.target.files[0];
+        if (f) f.arrayBuffer().then(loadGLB);
+        inputEl.value = '';
+    });
+}
+document.getElementById('browseGlbBtn').addEventListener('click', () =>
+    document.getElementById('glbInput').click());
+wireGlbInput(document.getElementById('glbInput'));
+
+document.getElementById('loadGlbBtn2').addEventListener('click', () =>
+    document.getElementById('glbInput2').click());
+wireGlbInput(document.getElementById('glbInput2'));
+
+// ── Drag-and-drop ─────────────────────────────────────────────────────────────
+function isVideo(name) { return /\.(mp4|mov|avi|mkv|webm|m4v|mts|m2ts)$/i.test(name); }
+function isGlb(name)   { return /\.glb$/i.test(name); }
+
+// Video panel drag-drop
+const videoPanel = document.getElementById('video-panel');
+videoPanel.addEventListener('dragover',  e => { e.preventDefault(); videoPanel.classList.add('dragover'); });
+videoPanel.addEventListener('dragleave', ()=> videoPanel.classList.remove('dragover'));
+videoPanel.addEventListener('drop', e => {
+    e.preventDefault(); videoPanel.classList.remove('dragover');
+    const f = e.dataTransfer.files[0];
+    if (f) loadVideoFile(f);
+});
+
+// GLB panel drag-drop
+glbPanel.addEventListener('dragover',  e => { e.preventDefault(); glbPanel.classList.add('dragover'); });
+glbPanel.addEventListener('dragleave', ()=> glbPanel.classList.remove('dragover'));
+glbPanel.addEventListener('drop', e => {
+    e.preventDefault(); glbPanel.classList.remove('dragover');
+    const f = e.dataTransfer.files[0];
+    if (f?.name.toLowerCase().endsWith('.glb')) f.arrayBuffer().then(loadGLB);
+});
+
+// Document-level drop: auto-route by file type
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    if (!f) return;
+    if (isGlb(f.name))   { f.arrayBuffer().then(loadGLB); return; }
+    if (isVideo(f.name)) { loadVideoFile(f); return; }
+});
+
+</script>
+</body>
+</html>
