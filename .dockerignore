@@ -37,12 +37,10 @@ output_*/
 .DS_Store
 Thumbs.db
 
-# Notebooks (optional; remove this line if you want them in the image)
+# Jupyter notebook files (but keep notebook/ package — it's imported by the pipeline)
 *.ipynb
-notebook/
 
-# Docker files themselves (avoid accidental recursive copy)
+# Docker meta-files (not needed inside the image)
 Dockerfile
 docker-compose.yml
 .dockerignore
-docker/

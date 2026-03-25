@@ -70,6 +70,11 @@ RUN conda create -y -n fast_sam_3d_body python=3.11 && \
         "git+https://github.com/microsoft/MoGe.git@07444410f1e33f402353b99d6ccd26bd31e469e8" \
         "git+https://github.com/EasternJournalist/pipeline.git@866f059d2a05cde05e4a52211ec5051fd5f276d6" \
         "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183" && \
+    # pip packages (ultralytics etc.) pull in opencv-python which has broken
+    # FFMPEG support in Docker. Uninstall it and replace with conda-forge opencv
+    # which links against system libav.
+    pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true && \
+    conda install -y -n fast_sam_3d_body -c conda-forge "opencv>=4.8" && \
     conda clean -afy && pip cache purge
 
 # --------------------------------------------------------------------------- #
