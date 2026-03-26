@@ -6,7 +6,7 @@ services:
   # Set FASTSAM_MODE=cli to run CLI commands instead.
   fastsam3d:
     build: .
-    image: fastsam3d:latest
+    image: ghcr.io/aitoririondo/easyergo-fastsam3d:latest
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
@@ -47,7 +47,7 @@ services:
   # ── CLI mode (optional, for local batch runs) ─────────────────────────────
   fastsam3d-cli:
     build: .
-    image: fastsam3d:latest
+    image: ghcr.io/aitoririondo/easyergo-fastsam3d:latest
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
