@@ -13,21 +13,64 @@
 
 ## Service Mode (HTTP API)
 
+The primary way to use this repo is as an HTTP service called from EasyErgoDashboard.
+
 ```bash
 # Start the service (port 8000)
 docker compose up -d
 
-# Health check
+# Health check — wait for model_loaded: true (~30s)
 curl http://localhost:8000/api/v1/health
+# → {"status": "ok", "model_loaded": true, "gpu_available": true, "jobs_queued": 0}
 
-# Submit a video
+# Submit a video (returns immediately with job_id)
 curl -X POST http://localhost:8000/api/v1/process \
-  -F "video=@recording.mp4" -F "person_height=1.75"
+  -F "video=@recording.mp4" \
+  -F "person_height=1.75" \
+  -F "inference_type=body"
+# → {"job_id": "abc123", "status": "queued"}
 
-# Full API docs at http://localhost:8000/docs
+# Poll status
+curl http://localhost:8000/api/v1/status/abc123
+# → {"status": "done", "progress": 100}
+
+# List output files
+curl http://localhost:8000/api/v1/results/abc123
+# → {"files": ["markers_recording.trc", "markers_recording_ik.mot",
+#              "markers_recording.mvnx", "markers_recording.ipsmvnx",
+#              "markers_recording.glb", ...], "duration_s": 142}
+
+# Download a file
+curl -O http://localhost:8000/api/v1/download/abc123/markers_recording.mvnx
+
+# Interactive API docs (Swagger UI)
+open http://localhost:8000/docs
 ```
 
-See [docs/service_api.md](docs/service_api.md) for the complete API reference.
+### API endpoints summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/health` | Service health + GPU + queue depth |
+| `POST` | `/api/v1/process` | Submit video → returns job_id (202) |
+| `GET` | `/api/v1/status/{job_id}` | Poll processing status + progress |
+| `GET` | `/api/v1/results/{job_id}` | List output files when done |
+| `GET` | `/api/v1/download/{job_id}/{filename}` | Stream download a result file |
+| `DELETE` | `/api/v1/results/{job_id}` | Delete job + outputs |
+
+### POST /api/v1/process fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `video` | file | required | MP4/MOV video upload |
+| `person_height` | float | `1.75` | Subject height in metres |
+| `inference_type` | string | `body` | `body` = fast; `full` = body + hands |
+| `fx` | float | auto | Camera focal length in pixels (omit to auto-estimate) |
+| `no_mesh_glb` | bool | `false` | Skip full-body mesh GLB (saves ~125 MB) |
+| `no_mvnx` | bool | `false` | Skip Xsens MVNX export |
+| `no_ipsmvnx` | bool | `false` | Skip IPS MVNX export |
+
+See [docs/service_api.md](docs/service_api.md) for the complete API reference including response schemas and EasyErgoDashboard integration examples.
 
 ---
 
@@ -64,11 +107,27 @@ output_20260320_173750_myvideo/
   markers_<name>_model.osim      — Pose2Sim_Simple body model
   markers_<name>.glb             — rigged animated skeleton (~1.3 MB for 584 frames)
   markers_<name>_mesh.glb        — animated full-body mesh (~126 MB, skip with --no_mesh_glb)
+  markers_<name>.mvnx            — Xsens MVNX v4 (positions + orientations + joint angles)
+  markers_<name>.ipsmvnx         — IPS MVNX for Industrial Path Solutions IMMA
   _ik_marker_errors.sto          — IK marker tracking residuals per frame
   inference_meta.json            — video metadata
   video_outputs.json             — per-frame raw 3D keypoints
   processing_report.json         — pipeline summary: timings, IK/GLB status
 ```
+
+### MVNX outputs
+
+**Normal MVNX** (`markers_<name>.mvnx`) — Xsens MVN Studio v4 format:
+- 23 Xsens anatomical segments
+- Position + orientation (quaternion) + joint angles per frame
+- Generated from TRC + IK MOT via OpenSim-to-MVNX
+- Requires successful IK; skipped if IK fails or with `--no_mvnx`
+
+**IPS MVNX** (`markers_<name>.ipsmvnx`) — Industrial Path Solutions IMMA format:
+- 73-marker positions only (no orientations), Z-up coordinate system
+- Compatible with IPS IMMA ergonomics analysis software
+- Always generated in body-only mode (uses all 70 MHR70 keypoints incl. fingers)
+- Skip with `--no_ipsmvnx`
 
 ### TRC marker set — 73 landmarks
 
@@ -122,7 +181,7 @@ sudo apt install blender
 pip3.12 install numpy --break-system-packages
 ```
 
-### 2. Run
+### 2. Run (CLI)
 
 ```bash
 conda activate fast_sam_3d_body
@@ -132,15 +191,51 @@ USE_TRT_BACKBONE=1 USE_COMPILE=1 DECODER_COMPILE=1 COMPILE_MODE=reduce-overhead 
 MHR_NO_CORRECTIVES=1 GPU_HAND_PREP=1 BODY_INTERM_PRED_LAYERS=0,2 \
 DEBUG_NAN=0 PARALLEL_DECODERS=0 COMPILE_WARMUP_BATCH_SIZES=1 \
 python demo_video_opensim.py \
-    --video_path ./videos/my_video.mp4 \
+    --input ./videos/my_video.mp4 \
+    --detector yolo_pose \
     --detector_model checkpoints/yolo/yolo11m-pose.engine \
-    --inference_type full \
-    --fx 1371
+    --inference_type body \
+    --person_height 1.75 \
+    --floor_moge \
+    --output_dir ./outputs/my_run
 ```
 
 Replace `--fx 1371` with your camera focal length in pixels
 (see [HOW_TO_RUN.md](HOW_TO_RUN.md) for how to compute it).
 If unknown, omit `--fx` and the pipeline will estimate it from the image.
+
+### 2b. Run via Docker (recommended)
+
+```bash
+# PyTorch mode (~8-10 fps on 5070 Ti)
+sudo docker compose run --rm \
+  -v /path/to/videos:/app/videos:ro \
+  -e SKIP_KEYPOINT_PROMPT=1 -e FOV_FAST=1 -e FOV_MODEL=s -e FOV_LEVEL=0 \
+  -e MHR_NO_CORRECTIVES=1 -e GPU_HAND_PREP=1 -e BODY_INTERM_PRED_LAYERS=0,2 \
+  fastsam3d \
+  python demo_video_opensim.py \
+    --input /app/videos/my_video.mp4 \
+    --detector yolo_pose \
+    --detector_model checkpoints/yolo/yolo11m-pose.pt \
+    --person_height 1.75 \
+    --floor_moge \
+    --output_dir /outputs/my_run
+
+# TRT mode (~18-20 fps on 5070 Ti, after building engines)
+sudo docker compose run --rm \
+  --env-file docker/trt.env \
+  -v /path/to/videos:/app/videos:ro \
+  fastsam3d \
+  python demo_video_opensim.py \
+    --input /app/videos/my_video.mp4 \
+    --detector yolo_pose \
+    --detector_model checkpoints/yolo/yolo11m-pose.engine \
+    --person_height 1.75 \
+    --floor_moge \
+    --output_dir /outputs/my_run
+```
+
+See [docs/docker_guide.md](docs/docker_guide.md) for full Docker documentation.
 
 ### 3. Open in OpenSim
 
@@ -160,14 +255,20 @@ The IK MOT is written automatically. Load directly without re-running IK:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--video_path` | — | Input video |
-| `--fx` | auto (MoGe) | Camera focal length in pixels |
-| `--inference_type` | `full` | `full` = body + hands (73 markers, IK-ready) · `body` = faster, fewer markers |
+| `--input` | required | Input video or image path |
+| `--output_dir` | auto | Output directory (default: `output_YYYYMMDD_HHMMSS_<name>/`) |
 | `--person_height` | `1.75` | Known subject height in metres — scales 3D output |
+| `--inference_type` | `body` | `body` = fast, all 70 keypoints · `full` = body + high-res hands |
+| `--detector` | `yolo_pose` | Pose detector backend |
+| `--detector_model` | — | Path to YOLO `.pt` or `.engine` checkpoint |
+| `--floor_moge` | off | Estimate floor plane with MoGe (recommended for outdoor videos) |
+| `--fx` | auto (MoGe) | Camera focal length in pixels (omit to auto-estimate) |
 | `--no_mesh_glb` | off | Skip full-body mesh GLB export (saves ~125 MB) |
+| `--no_mvnx` | off | Skip Xsens MVNX export |
+| `--no_ipsmvnx` | off | Skip IPS MVNX export |
 | `--target_fps` | 0 | Downsample input to this FPS (0 = every frame) |
 | `--max_frames` | 0 | Stop after N frames (0 = full video) |
-| `--output_dir` | auto | Output directory (default: `output_YYYYMMDD_HHMMSS_<name>/`) |
+| `--lean_fix` | on | Correct forward lean (spine-based, default) |
 
 ---
 
@@ -199,9 +300,11 @@ Camera-space keypoints  (N, 70, 3)
     │    ├─ centre pelvis at origin (XZ)
     │    ├─ align feet to ground (Y=0) per frame
     │    └─ correct forward lean (auto-detected)
-    ▼  KeypointConverter   (MHR70 → 73 OpenSim markers)
+    ▼  KeypointConverter   (MHR70 → 73 OpenSim markers + IPS 73-marker set)
     ▼  TRCExporter         → markers_<name>.trc  (mm)
     ▼  OpenSim IK          → markers_<name>_ik.mot  (subprocess → opensim env)
+    ▼  OpenSim-to-MVNX     → markers_<name>.mvnx  (Xsens MVN Studio v4)
+    ▼  TRCtoIPS            → markers_<name>.ipsmvnx  (IPS IMMA format)
     ▼  Blender GLB         → markers_<name>.glb  (subprocess → blender + rigify rig)
     ▼  write_mesh_glb()    → markers_<name>_mesh.glb
 ```
@@ -221,6 +324,19 @@ Without these, the offline export pipeline works fully.
 ---
 
 ## Documentation index
+
+### EasyErgo service docs
+
+| File | Contents |
+|------|----------|
+| [docs/service_api.md](docs/service_api.md) | Full HTTP API reference, curl + Python examples, EasyErgoDashboard integration |
+| [docs/server_setup.md](docs/server_setup.md) | Deployment guide for RTX 5070 Ti Linux server |
+| [docs/trt_compilation.md](docs/trt_compilation.md) | TRT engine build guide, performance tables, troubleshooting |
+| [docs/docker_guide.md](docs/docker_guide.md) | Docker service/CLI mode, known gotchas (OpenCV, symlinks), rebuild guide |
+| [docs/github_actions_investigation.md](docs/github_actions_investigation.md) | CI/CD options analysis (not yet implemented) |
+| [CLAUDE.md](CLAUDE.md) | Full setup notes for AI assistants — tricky install details, env vars, known issues |
+
+### Original pipeline docs
 
 | File | Contents |
 |------|----------|
