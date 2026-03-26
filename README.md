@@ -1,11 +1,33 @@
-# FastSAM3DToOpenSim
+# EasyErgo FastSAM3D Service
 
-> **OpenSim biomechanics extension of [Fast SAM 3D Body](https://github.com/yangtiming/Fast-SAM-3D-Body)**
+> **HTTP microservice for EasyErgo ergonomics analysis**
 >
-> Takes the Fast-SAM-3D-Body inference pipeline and exports every frame of a video directly
-> to OpenSim-ready files: TRC marker trajectories, IK-solved MOT joint angles, body model,
-> and a rigged animated GLB skeleton for Blender / three.js.
-> Matches the output format of [SAM3D-OpenSim](https://github.com/AitorIriondo/SAM3D-OpenSim).
+> Wraps the FastSAM3DToOpenSim inference pipeline as a REST API.
+> Accepts video uploads from [EasyErgoDashboard](https://github.com/AitorIriondo/EasyErgoDashboard)
+> and returns biomechanics outputs: TRC, IK MOT, GLB meshes, and MVNX files
+> for Xsens MVN Studio and Industrial Path Solutions (IPS IMMA).
+>
+> Designed to run on a Linux server (RTX 5070 Ti) inside Docker.
+
+---
+
+## Service Mode (HTTP API)
+
+```bash
+# Start the service (port 8000)
+docker compose up -d
+
+# Health check
+curl http://localhost:8000/api/v1/health
+
+# Submit a video
+curl -X POST http://localhost:8000/api/v1/process \
+  -F "video=@recording.mp4" -F "person_height=1.75"
+
+# Full API docs at http://localhost:8000/docs
+```
+
+See [docs/service_api.md](docs/service_api.md) for the complete API reference.
 
 ---
 
@@ -18,6 +40,10 @@
 | OpenSim TRC marker file (73 markers, mm) | — | ✓ |
 | OpenSim IK-solved MOT (40 DOF, via OpenSim 4.5) | — | ✓ |
 | Pose2Sim_Simple body model | — | ✓ |
+| Xsens MVNX v4 (positions + orientations + joint angles) | — | ✓ |
+| IPS MVNX (.ipsmvnx for IPS IMMA ergonomics) | — | ✓ |
+| HTTP REST API (FastAPI) | — | ✓ |
+| Docker service with GPU support | — | ✓ |
 | Rigged animated skeleton GLB (Blender / three.js) | — | ✓ |
 | Animated full-body mesh GLB | — | ✓ (opt-in) |
 | Timestamped output folders | — | ✓ |

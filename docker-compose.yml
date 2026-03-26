@@ -1,6 +1,9 @@
 version: "3.9"
 
 services:
+  # ── Service mode (default) ─────────────────────────────────────────────────
+  # Starts the FastAPI HTTP server on port 8000.
+  # Set FASTSAM_MODE=cli to run CLI commands instead.
   fastsam3d:
     build: .
     image: fastsam3d:latest
@@ -8,6 +11,8 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      # ── Service mode ────────────────────────────────────────────────────────
+      - FASTSAM_MODE=service
       # ── PyTorch-only defaults (no TRT) ──────────────────────────────────────
       # After building .engine files, override via: --env-file docker/trt.env
       - FOV_TRT=0
@@ -24,10 +29,52 @@ services:
       - PARALLEL_DECODERS=0
       - COMPILE_WARMUP_BATCH_SIZES=1
       - SKIP_KEYPOINT_PROMPT=1
+      # ── CORS origins (comma-separated, default=* for LAN use) ───────────────
+      - CORS_ORIGINS=*
+      # ── Job TTL (hours, default=24) ─────────────────────────────────────────
+      - JOB_TTL_HOURS=24
+    ports:
+      - "8000:8000"                  # FastAPI service
     volumes:
-      - ./checkpoints:/app/checkpoints        # 7.6 GB — never baked into image
+      - ./checkpoints:/app/checkpoints   # ~7.6 GB — never baked into image
+      - ./videos:/app/videos:ro          # optional: for CLI mode
+      - ./outputs:/outputs               # optional: for CLI mode
+      - fastsam_jobs:/app/job_outputs    # persistent job outputs
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  # ── CLI mode (optional, for local batch runs) ─────────────────────────────
+  fastsam3d-cli:
+    build: .
+    image: fastsam3d:latest
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+      - FASTSAM_MODE=cli
+      - FOV_TRT=0
+      - FOV_FAST=1
+      - FOV_MODEL=s
+      - FOV_LEVEL=0
+      - USE_TRT_BACKBONE=0
+      - USE_COMPILE=0
+      - DECODER_COMPILE=0
+      - MHR_NO_CORRECTIVES=1
+      - GPU_HAND_PREP=1
+      - BODY_INTERM_PRED_LAYERS=0,2
+      - DEBUG_NAN=0
+      - PARALLEL_DECODERS=0
+      - COMPILE_WARMUP_BATCH_SIZES=1
+      - SKIP_KEYPOINT_PROMPT=1
+    volumes:
+      - ./checkpoints:/app/checkpoints
       - ./videos:/app/videos:ro
       - ./outputs:/outputs
     stdin_open: true
     tty: true
-    command: bash
+    profiles:
+      - cli     # only started with: docker compose --profile cli run fastsam3d-cli
+
+volumes:
+  fastsam_jobs:    # named volume for job output persistence

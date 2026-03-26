@@ -181,3 +181,8 @@ wrapt==2.1.2
 xtcocotools==1.14.3
 yacs==0.1.8
 yarl==1.23.0
+
+# ── Service dependencies ──────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12

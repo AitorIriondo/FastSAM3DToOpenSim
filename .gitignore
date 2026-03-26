@@ -18,3 +18,9 @@ checkpoints/**/*_trt/
 output_opensim/
 output_video/
 videos/
+
+# Job outputs (service mode)
+job_outputs/
+
+# Vendored third-party libraries are tracked intentionally
+!vendor/

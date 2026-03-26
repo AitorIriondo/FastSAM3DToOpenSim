@@ -1,0 +1,325 @@
+{
+	"_comment": "IPS MocapSetup for TRCToIPS MVNX files. All TCPNames are verified against C:\\EPP\\IPS_2026-R2-a3-xsens2\\Data\\IMMA\\TCPLists\\1MainList.json. This IPS version has no finger TCPs except Right/Left Middle Distal, so all other finger constraints are omitted. 25 constraints total.",
+	"FrameConstraints": [
+
+		{
+			"_comment": "=== SPINE / TRUNK ===",
+			"MocapFrame": "PelvisCenter",
+			"TCPName": "Hip-Centre",
+			"Constraints": [
+				{
+					"Type": "TranslationEquality",
+					"x": true,
+					"y": true,
+					"z": false
+				}
+			]
+		},
+		{
+			"MocapFrame": "SpineMid",
+			"TCPName": "L5S1",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "Thorax",
+			"TCPName": "T6T7",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+
+		{
+			"_comment": "=== SHOULDERS / UPPER ARMS ===",
+			"MocapFrame": "LAcromion",
+			"TCPName": "Left Shoulder Joint",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RAcromion",
+			"TCPName": "Right Shoulder Joint",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "LShoulder",
+			"TCPName": "Left Upper Arm",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RShoulder",
+			"TCPName": "Right Upper Arm",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+
+		{
+			"_comment": "=== ELBOWS ===",
+			"MocapFrame": "LElbow",
+			"TCPName": "Left Elbow",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RElbow",
+			"TCPName": "Right Elbow",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+
+		{
+			"_comment": "=== WRISTS (hard — drives hand position) ===",
+			"MocapFrame": "LWrist",
+			"TCPName": "Left Wrist",
+			"Constraints": [
+				{
+					"Type": "TranslationEquality",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RWrist",
+			"TCPName": "Right Wrist",
+			"Constraints": [
+				{
+					"Type": "TranslationEquality",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+
+		{
+			"_comment": "=== FINGERS — only Right/Left Middle Distal exist in this IPS version ===",
+			"MocapFrame": "RMiddleTip",
+			"TCPName": "Right Middle Distal",
+			"Constraints": [
+				{
+					"Type": "TranslationEquality",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "LMiddleTip",
+			"TCPName": "Left Middle Distal",
+			"Constraints": [
+				{
+					"Type": "TranslationEquality",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+
+		{
+			"_comment": "=== HIPS ===",
+			"MocapFrame": "LHip",
+			"TCPName": "Left Hip",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RHip",
+			"TCPName": "Right Hip",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+
+		{
+			"_comment": "=== KNEES ===",
+			"MocapFrame": "LKnee",
+			"TCPName": "Left Knee",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RKnee",
+			"TCPName": "Right Knee",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+
+		{
+			"_comment": "=== ANKLES — 'Lower Leg' TCP sits at the ankle rotation joint (LeftAnkleRot / RightAnkleRot) ===",
+			"MocapFrame": "LAnkle",
+			"TCPName": "Left Lower Leg",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RAnkle",
+			"TCPName": "Right Lower Leg",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+
+		{
+			"_comment": "=== HEELS (hard) ===",
+			"MocapFrame": "LHeel",
+			"TCPName": "Left Heel Point",
+			"Constraints": [
+				{
+					"Type": "TranslationEquality",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RHeel",
+			"TCPName": "Right Heel Point",
+			"Constraints": [
+				{
+					"Type": "TranslationEquality",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+
+		{
+			"_comment": "=== TOES ===",
+			"MocapFrame": "LBigToe",
+			"TCPName": "Left Ball of Foot",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RBigToe",
+			"TCPName": "Right Ball of Foot",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "LSmallToe",
+			"TCPName": "Left Toe Tip",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		},
+		{
+			"MocapFrame": "RSmallToe",
+			"TCPName": "Right Toe Tip",
+			"Constraints": [
+				{
+					"Type": "TranslationSoft",
+					"x": true,
+					"y": true,
+					"z": true
+				}
+			]
+		}
+	]
+}

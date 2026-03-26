@@ -1,4 +1,26 @@
-# Docker Guide — FastSAM3DToOpenSim
+# Docker Guide — EasyErgo FastSAM3D Service
+
+## Service Mode vs CLI Mode
+
+The container supports two modes controlled by `FASTSAM_MODE`:
+
+| Mode | Behaviour | Default |
+|------|-----------|---------|
+| `service` | Starts FastAPI HTTP server on port 8000 | **Yes** |
+| `cli` | Passes through to CLI (batch inference) | No |
+
+```bash
+# Service mode (default) — EasyErgo API
+docker compose up -d
+
+# CLI mode — batch run a single video
+docker compose run --rm -e FASTSAM_MODE=cli fastsam3d \
+  python demo_video_opensim.py --input /app/videos/test.mp4 --person_height 1.75
+```
+
+See [service_api.md](service_api.md) for the full HTTP API reference.
+
+---
 
 ## What the image contains
 
@@ -124,9 +146,9 @@ docker run --rm --runtime=nvidia nvidia/cuda:12.8.1-base-ubuntu22.04 nvidia-smi
 ### Transfer the code
 
 ```bash
-# Option A: git clone
-git clone https://github.com/AitorIriondo/FastSAM3DToOpenSim.git
-cd FastSAM3DToOpenSim
+# Clone the service repo
+git clone https://github.com/AitorIriondo/EasyErgo_FastSam3DService.git
+cd EasyErgo_FastSam3DService
 
 # Option B: rsync from the development machine
 rsync -av --exclude='outputs/' --exclude='*.engine' \

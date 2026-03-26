@@ -5,6 +5,100 @@ Ported from https://github.com/AitorIriondo/SAM3D-OpenSim
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 
+# TRCtoIPS expects exactly 73 markers in this order.  Each entry maps
+# TRCtoIPS marker name → (source, index_or_pair) where source is
+# "kpt"   → keypoints_3d[:, index, :]
+# "mid"   → mean of two keypoint indices
+# "jc"    → jcoords_3d[:, index, :]
+# "jcmid" → mean of two jcoord indices
+_IPS_MARKER_SOURCES = [
+    # ── head / face ────────────────────────────────────────────────────────────
+    ("Nose",         "kpt",   0),
+    ("LEye",         "kpt",   1),
+    ("REye",         "kpt",   2),
+    ("LEar",         "kpt",   3),
+    ("REar",         "kpt",   4),
+    # ── upper body ─────────────────────────────────────────────────────────────
+    ("LShoulder",    "kpt",   5),
+    ("RShoulder",    "kpt",   6),
+    ("LElbow",       "kpt",   7),
+    ("RElbow",       "kpt",   8),
+    # ── lower body ─────────────────────────────────────────────────────────────
+    ("LHip",         "kpt",   9),
+    ("RHip",         "kpt",  10),
+    ("LKnee",        "kpt",  11),
+    ("RKnee",        "kpt",  12),
+    ("LAnkle",       "kpt",  13),
+    ("RAnkle",       "kpt",  14),
+    ("LBigToe",      "kpt",  15),
+    ("LSmallToe",    "kpt",  16),
+    ("LHeel",        "kpt",  17),
+    ("RBigToe",      "kpt",  18),
+    ("RSmallToe",    "kpt",  19),
+    ("RHeel",        "kpt",  20),
+    # ── right hand fingers (tip=distal, 1=DIP, 2=PIP, 3=MCP) ──────────────────
+    ("RThumbTip",    "kpt",  21),
+    ("RThumb1",      "kpt",  22),
+    ("RThumb2",      "kpt",  23),
+    ("RThumb3",      "kpt",  24),
+    ("RIndexTip",    "kpt",  25),
+    ("RIndex1",      "kpt",  26),
+    ("RIndex2",      "kpt",  27),
+    ("RIndex3",      "kpt",  28),
+    ("RMiddleTip",   "kpt",  29),
+    ("RMiddle1",     "kpt",  30),
+    ("RMiddle2",     "kpt",  31),
+    ("RMiddle3",     "kpt",  32),
+    ("RRingTip",     "kpt",  33),
+    ("RRing1",       "kpt",  34),
+    ("RRing2",       "kpt",  35),
+    ("RRing3",       "kpt",  36),
+    ("RPinkyTip",    "kpt",  37),
+    ("RPinky1",      "kpt",  38),
+    ("RPinky2",      "kpt",  39),
+    ("RPinky3",      "kpt",  40),
+    ("RWrist",       "kpt",  41),
+    # ── left hand fingers ──────────────────────────────────────────────────────
+    ("LThumbTip",    "kpt",  42),
+    ("LThumb1",      "kpt",  43),
+    ("LThumb2",      "kpt",  44),
+    ("LThumb3",      "kpt",  45),
+    ("LIndexTip",    "kpt",  46),
+    ("LIndex1",      "kpt",  47),
+    ("LIndex2",      "kpt",  48),
+    ("LIndex3",      "kpt",  49),
+    ("LMiddleTip",   "kpt",  50),
+    ("LMiddle1",     "kpt",  51),
+    ("LMiddle2",     "kpt",  52),
+    ("LMiddle3",     "kpt",  53),
+    ("LRingTip",     "kpt",  54),
+    ("LRing1",       "kpt",  55),
+    ("LRing2",       "kpt",  56),
+    ("LRing3",       "kpt",  57),
+    ("LPinkyTip",    "kpt",  58),
+    ("LPinky1",      "kpt",  59),
+    ("LPinky2",      "kpt",  60),
+    ("LPinky3",      "kpt",  61),
+    ("LWrist",       "kpt",  62),
+    # ── anatomical reference ────────────────────────────────────────────────────
+    ("LOlecranon",   "kpt",  63),
+    ("ROlecranon",   "kpt",  64),
+    ("LCubitalFossa","kpt",  65),
+    ("RCubitalFossa","kpt",  66),
+    ("LAcromion",    "kpt",  67),
+    ("RAcromion",    "kpt",  68),
+    ("Neck",         "kpt",  69),
+    # ── derived / spine ─────────────────────────────────────────────────────────
+    ("PelvisCenter", "mid",  (9, 10)),    # (LHip + RHip) / 2
+    ("Thorax",       "mid",  (67, 68)),   # (LAcromion + RAcromion) / 2
+    # SpineMid: mean of c_spine1 (jc35, upper-lumbar) and c_spine2 (jc36, lower-thoracic)
+    # Fallback to midpoint of LElbow/RElbow if jcoords unavailable.
+    ("SpineMid",     "jcmid", (35, 36)),
+]
+
+# IPS marker names in TRCtoIPS order (used as the marker_names list)
+IPS_MARKER_NAMES: List[str] = [entry[0] for entry in _IPS_MARKER_SOURCES]
+
 
 # MHR70 hand keypoint indices (21-40 right hand, 42-61 left hand).
 # Body-only mode includes 2 markers per hand: Index tip + Pinky tip.
@@ -120,6 +214,68 @@ class KeypointConverter:
             markers = markers[0]
 
         return markers, marker_names
+
+    def convert_for_ips(
+        self,
+        keypoints_3d: np.ndarray,
+        jcoords_3d: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, List[str]]:
+        """
+        Convert MHR70 keypoints to the 73-marker set expected by TRCtoIPS.
+
+        All 70 MHR70 keypoints are included regardless of inference mode —
+        body-only mode still produces finger predictions (lower accuracy, same
+        structure), so MVNX export is always available.
+
+        Args:
+            keypoints_3d : (N, 70, 3) array in OpenSim mm (Y-up)
+            jcoords_3d   : (N, 127, 3) MHR armature joints (optional).
+                           Used for SpineMid; falls back to geometric estimate.
+
+        Returns:
+            (markers array [N, 73, 3], marker_names list [73])
+        """
+        single_frame = keypoints_3d.ndim == 2
+        if single_frame:
+            keypoints_3d = keypoints_3d[np.newaxis]
+            if jcoords_3d is not None:
+                jcoords_3d = jcoords_3d[np.newaxis]
+
+        N = keypoints_3d.shape[0]
+        marker_list = []
+
+        for name, src, idx in _IPS_MARKER_SOURCES:
+            if src == "kpt":
+                marker_list.append(keypoints_3d[:, idx, :])
+            elif src == "mid":
+                a, b = idx
+                marker_list.append(
+                    (keypoints_3d[:, a, :] + keypoints_3d[:, b, :]) / 2.0
+                )
+            elif src == "jc":
+                if jcoords_3d is not None:
+                    marker_list.append(jcoords_3d[:, idx, :])
+                else:
+                    # Fallback: zero vector
+                    marker_list.append(np.zeros((N, 3), dtype=keypoints_3d.dtype))
+            elif src == "jcmid":
+                a, b = idx
+                if jcoords_3d is not None:
+                    marker_list.append(
+                        (jcoords_3d[:, a, :] + jcoords_3d[:, b, :]) / 2.0
+                    )
+                else:
+                    # Geometric fallback: midpoint of left/right elbow
+                    marker_list.append(
+                        (keypoints_3d[:, 7, :] + keypoints_3d[:, 8, :]) / 2.0
+                    )
+
+        markers = np.stack(marker_list, axis=1)  # (N, 73, 3)
+
+        if single_frame:
+            markers = markers[0]
+
+        return markers, IPS_MARKER_NAMES
 
     def _compute_derived(self, keypoints_3d, definition):
         t = definition["type"]

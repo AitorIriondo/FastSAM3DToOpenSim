@@ -12,6 +12,10 @@ from the file extension.  Writes to <output_dir>/:
   markers_<name>_model.osim     — Pose2Sim_Simple body model for IK
   markers_<name>.glb            — animated skeleton GLB (Blender/rigify)
   markers_<name>_mesh.glb       — full body mesh GLB (--no_mesh_glb to skip)
+  markers_<name>.mvnx           — Xsens MVN v4: positions+orientations+joint angles
+                                   (requires IK MOT; --no_mvnx to skip)
+  markers_<name>.ipsmvnx        — IPS MVNX: 73-segment position-only for IPS IMMA
+                                   (--no_ipsmvnx to skip)
   inference_meta.json           — input metadata
   video_outputs.json            — per-frame raw 3D keypoints
   processing_report.json        — pipeline summary and timings
@@ -83,6 +87,7 @@ from sam_3d_body.export.coordinate_transform import CoordinateTransformer
 from sam_3d_body.export.keypoint_converter import KeypointConverter
 from sam_3d_body.export.trc_exporter import TRCExporter
 from sam_3d_body.export.opensim_ik_runner import run_ik, run_scale_tool
+from sam_3d_body.export.mvnx_exporter import export_normal_mvnx, export_ips_mvnx
 
 # Pose2Sim Wholebody model — has explicit lumbar5–lumbar1 spine segments
 # so that MHR armature spine joints (c_spine0–3, c_neck, c_head) actually
@@ -273,6 +278,8 @@ def main(args):
     errors_path    = os.path.join(args.output_dir, "_ik_marker_errors.sto")
     osim_path      = os.path.join(args.output_dir, f"{prefix}_model.osim")
     mesh_glb       = os.path.join(args.output_dir, f"{prefix}_mesh.glb")
+    mvnx_path      = os.path.join(args.output_dir, f"{prefix}.mvnx")
+    ipsmvnx_path   = os.path.join(args.output_dir, f"{prefix}.ipsmvnx")
     meta_path      = os.path.join(args.output_dir, "inference_meta.json")
     outputs_path   = os.path.join(args.output_dir, "video_outputs.json")
 
@@ -692,6 +699,35 @@ def main(args):
     if not ik_ok:
         print("  WARNING: OpenSim IK failed or opensim env not found.")
 
+    # ── MVNX export ───────────────────────────────────────────────────────────
+    mvnx_ok = False
+    ipsmvnx_ok = False
+
+    if not args.no_mvnx:
+        if ik_ok and os.path.exists(ik_mot_path):
+            result = export_normal_mvnx(
+                trc_path=trc_path,
+                mot_path=ik_mot_path,
+                output_path=mvnx_path,
+                fps=out_fps,
+                subject_height=subject_height,
+                osim_path=osim_path if os.path.exists(osim_path) else None,
+                original_filename=os.path.basename(input_path),
+            )
+            mvnx_ok = result is not None
+        else:
+            print("  Skipping MVNX export — IK MOT not available.")
+
+    if not args.no_ipsmvnx:
+        result = export_ips_mvnx(
+            keypoints_opensim=kpts_opensim,
+            jcoords_opensim=jcoords_opensim,
+            fps=out_fps,
+            output_path=ipsmvnx_path,
+            input_name=input_name,
+        )
+        ipsmvnx_ok = result is not None
+
     if not args.no_mesh_glb:
         print(f"  Writing mesh GLB  → {mesh_glb}")
         write_mesh_glb(mesh_glb, timestamps, all_verts, estimator.faces,
@@ -722,7 +758,9 @@ def main(args):
             "trc": trc_path,
             "mot": ik_mot_path if ik_ok else None,
             "model": osim_path,
-            "mesh_glb": mesh_glb,
+            "mesh_glb": mesh_glb if not args.no_mesh_glb else None,
+            "mvnx": mvnx_path if mvnx_ok else None,
+            "ipsmvnx": ipsmvnx_path if ipsmvnx_ok else None,
         },
     }
     with open(report_path, "w") as f:
@@ -736,6 +774,10 @@ def main(args):
     print(f"  Body model:          {os.path.basename(osim_path)}")
     if not args.no_mesh_glb:
         print(f"  Mesh GLB:            {os.path.basename(mesh_glb)}")
+    if not args.no_mvnx:
+        print(f"  MVNX (Xsens v4):     {os.path.basename(mvnx_path)}" + (" ✓" if mvnx_ok else " (skipped)"))
+    if not args.no_ipsmvnx:
+        print(f"  IPS MVNX:            {os.path.basename(ipsmvnx_path)}" + (" ✓" if ipsmvnx_ok else " (skipped)"))
     print(f"  Processing report:   {os.path.basename(report_path)}")
 
     print("""
@@ -774,6 +816,10 @@ if __name__ == "__main__":
                         help="Stop after this many input frames (0=all)")
     parser.add_argument("--no_mesh_glb", action="store_true",
                         help="Skip full body mesh GLB export (saves ~185 MB for long videos)")
+    parser.add_argument("--no_mvnx", action="store_true",
+                        help="Skip normal MVNX export (requires IK MOT to succeed)")
+    parser.add_argument("--no_ipsmvnx", action="store_true",
+                        help="Skip IPS MVNX export (.ipsmvnx for Industrial Path Solutions IMMA)")
     parser.add_argument("--no_lean_fix", action="store_true",
                         help="Skip automatic forward-lean correction")
     parser.add_argument("--floor_moge", action="store_true",
