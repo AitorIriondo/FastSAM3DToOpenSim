@@ -583,7 +583,7 @@ def main(args):
 
     # 1. Interpolate missing frames and Butterworth-filter (no manual bone scaling —
     #    the estimator's proportions are used directly; height is set from user input)
-    post_proc = PostProcessor()
+    post_proc = PostProcessor(filter_cutoff=args.filter_hz)
     kpts_processed    = post_proc.process(kpts_stack, fps=out_fps)
     jcoords_processed = post_proc.process_jcoords(jcoords_stack, fps=out_fps)
     # Interpolate + smooth cam_t for global walking trajectory in TRC.
@@ -838,6 +838,9 @@ if __name__ == "__main__":
                              "does not affect kinematics.")
     parser.add_argument("--floor_level", action="store_true",
                         help="(Legacy flag) Per-frame ground alignment is always applied.")
+    parser.add_argument("--filter_hz", type=float, default=6.0,
+                        help="Butterworth low-pass filter cutoff frequency in Hz (default: 6.0). "
+                             "Applied to keypoints and joint coordinates after interpolation.")
     parser.add_argument("--fx", type=float, default=None,
                         help="Focal length x (pixels). Skips MoGe FOV estimation if set.")
     parser.add_argument("--fy", type=float, default=None)

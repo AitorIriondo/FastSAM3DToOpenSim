@@ -263,6 +263,7 @@ The IK MOT is written automatically. Load directly without re-running IK:
 | `--detector_model` | — | Path to YOLO `.pt` or `.engine` checkpoint |
 | `--floor_moge` | off | Estimate floor plane with MoGe (recommended for outdoor videos) |
 | `--fx` | auto (MoGe) | Camera focal length in pixels (omit to auto-estimate) |
+| `--filter_hz` | `6.0` | Butterworth low-pass filter cutoff in Hz (applied to all keypoints) |
 | `--no_mesh_glb` | off | Skip full-body mesh GLB export (saves ~125 MB) |
 | `--no_mvnx` | off | Skip Xsens MVNX export |
 | `--no_ipsmvnx` | off | Skip IPS MVNX export |

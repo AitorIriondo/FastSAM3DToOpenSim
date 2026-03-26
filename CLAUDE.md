@@ -366,3 +366,9 @@ Then rebuild engines on the target GPU.
 | `JOB_TTL_HOURS` | `24` | How long to keep job outputs before cleanup |
 
 See [SETTINGS.md](SETTINGS.md) for the full list with measured performance impact.
+
+### CLI flags that affect smoothing
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--filter_hz` | `6.0` | Butterworth low-pass cutoff in Hz — lower = smoother, higher = more responsive |
